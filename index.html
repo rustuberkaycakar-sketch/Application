@@ -97,8 +97,8 @@
       <div class="row"><label>ANF</label><input id="boomAnfX" class="w110" placeholder="X"><input id="boomAnfY" class="w110" placeholder="Y"></div>
       <div class="row"><label>VF</label><input id="boomVfX" class="w110" placeholder="X"><input id="boomVfY" class="w110" placeholder="Y"></div>
       <div class="row"><label>Merkez</label><input id="boomCenterX" class="w110" placeholder="X"><input id="boomCenterY" class="w110" placeholder="Y"></div>
-      <div class="row"><label>Zone</label><input id="boomZone" class="w80" value="36T"><button class="primary" onclick="calcBoomAngle()">Hesapla</button><button onclick="fillBoomCenterFromMain()">Merkezi Al</button></div>
-      <div id="boomResult" class="boom-result">VF → Merkez ve Merkez → ANF açı ortalaması burada görünür.</div>
+      <div class="row"><label>Zone</label><input id="boomZone" class="w80" value="36T"><button class="primary" onclick="calcBoomAngle()">Hesapla</button><button onclick="downloadBoomTxt()">TXT İndir</button><button onclick="fillBoomCenterFromMain()">Merkezi Al</button></div>
+      <div id="boomResult" class="boom-result">Global Mapper ile uyumlu boom açısı burada görünür.</div>
     </div>
     <div class="layers"><h3>Katmanlar</h3><div id="layerList"></div></div>
     <div id="coordbar" class="coordbar">WGS84: - | ED50/UTM: - | Zone: -</div>
@@ -130,7 +130,38 @@ function angleMean(a,b){let x=Math.cos(a*Math.PI/180)+Math.cos(b*Math.PI/180),y=
 function edBearing(x1,y1,x2,y2){return (Math.atan2(x2-x1,y2-y1)*180/Math.PI+360)%360}
 function toggleBoomPanel(){el('boomPanel').classList.toggle('hidden');updateButtonStates()}
 function fillBoomCenterFromMain(){try{let lat=num('lat','Enlem'),lon=num('lon','Boylam'),z=val('zone')||zoneFor(lat,lon),xy=wgsToEd50(lat,lon,z);el('boomCenterX').value=xy[0].toFixed(0);el('boomCenterY').value=xy[1].toFixed(0);el('boomZone').value=z;status('Merkez boom hesabına aktarıldı.')}catch(e){status('Hata: '+e.message)}}
-function calcBoomAngle(){try{let vfx=num('boomVfX','VF X'),vfy=num('boomVfY','VF Y'),cx=num('boomCenterX','Merkez X'),cy=num('boomCenterY','Merkez Y'),anfx=num('boomAnfX','ANF X'),anfy=num('boomAnfY','ANF Y');let a1=edBearing(vfx,vfy,cx,cy),a2=edBearing(cx,cy,anfx,anfy),avg=angleMean(a1,a2);el('boomResult').innerHTML=`VF → Merkez açısı: <b>${a1.toFixed(3)}°</b><br>Merkez → ANF açısı: <b>${a2.toFixed(3)}°</b><br>Ortalama boom açısı: <b>${avg.toFixed(3)}°</b>`;status('Boom açısı hesaplandı: '+avg.toFixed(3)+'°')}catch(e){status('Hata: '+e.message)}}
+function dms(a){let d=Math.floor(a),mFloat=(a-d)*60,m=Math.floor(mFloat),sec=(mFloat-m)*60;return `${d}° ${String(m).padStart(2,'0')}' ${sec.toFixed(2)}"`}
+function vincentyBearing(lat1,lon1,lat2,lon2){
+  const a=6378137.0,f=1/298.257223563,b=(1-f)*a;
+  const φ1=lat1*Math.PI/180,φ2=lat2*Math.PI/180,L=(lon2-lon1)*Math.PI/180;
+  const U1=Math.atan((1-f)*Math.tan(φ1)),U2=Math.atan((1-f)*Math.tan(φ2));
+  const sinU1=Math.sin(U1),cosU1=Math.cos(U1),sinU2=Math.sin(U2),cosU2=Math.cos(U2);
+  let λ=L,λP,iter=100,cosSqAlpha,sinSigma,cosSigma,sigma,cos2SigmaM;
+  do{
+    const sinλ=Math.sin(λ),cosλ=Math.cos(λ);
+    sinSigma=Math.sqrt((cosU2*sinλ)**2+(cosU1*sinU2-sinU1*cosU2*cosλ)**2);
+    if(sinSigma===0) return 0;
+    cosSigma=sinU1*sinU2+cosU1*cosU2*cosλ;
+    sigma=Math.atan2(sinSigma,cosSigma);
+    const sinAlpha=cosU1*cosU2*sinλ/sinSigma;
+    cosSqAlpha=1-sinAlpha*sinAlpha;
+    cos2SigmaM=cosSqAlpha!==0 ? cosSigma-2*sinU1*sinU2/cosSqAlpha : 0;
+    const C=f/16*cosSqAlpha*(4+f*(4-3*cosSqAlpha));
+    λP=λ;
+    λ=L+(1-C)*f*sinAlpha*(sigma+C*sinSigma*(cos2SigmaM+C*cosSigma*(-1+2*cos2SigmaM*cos2SigmaM)));
+  }while(Math.abs(λ-λP)>1e-12 && --iter>0);
+  if(iter===0) return bearing(lat1,lon1,lat2,lon2);
+  const α1=Math.atan2(cosU2*Math.sin(λ),cosU1*sinU2-sinU1*cosU2*Math.cos(λ));
+  return (α1*180/Math.PI+360)%360;
+}
+function getBoomData(){
+  let vfx=num('boomVfX','VF X'),vfy=num('boomVfY','VF Y'),cx=num('boomCenterX','Merkez X'),cy=num('boomCenterY','Merkez Y'),anfx=num('boomAnfX','ANF X'),anfy=num('boomAnfY','ANF Y'),z=val('boomZone')||'36T';
+  let vf=ed50ToWgs(vfx,vfy,z),c=ed50ToWgs(cx,cy,z),anf=ed50ToWgs(anfx,anfy,z);
+  let a1=vincentyBearing(vf.lat,vf.lon,c.lat,c.lon),a2=vincentyBearing(c.lat,c.lon,anf.lat,anf.lon),avg=angleMean(a1,a2);
+  return {vfx,vfy,cx,cy,anfx,anfy,a1,a2,avg};
+}
+function calcBoomAngle(){try{let b=getBoomData();el('boomResult').innerHTML=`<b>Global Mapper Bearing</b><br>VF → Merkez: <b>${b.a1.toFixed(3)}°</b> (${dms(b.a1)})<br>Merkez → ANF: <b>${b.a2.toFixed(3)}°</b> (${dms(b.a2)})<br>Ortalama boom açısı: <b>${b.avg.toFixed(3)}°</b> (${dms(b.avg)})`;status('Boom açısı hesaplandı: '+b.avg.toFixed(3)+'°')}catch(e){status('Hata: '+e.message)}}
+function downloadBoomTxt(){try{let b=getBoomData();let txt=`Merkez\t${String(Math.round(b.cx)).padStart(7,'0')}\t${Math.round(b.cy)}\nVF\t${String(Math.round(b.vfx)).padStart(7,'0')}\t${Math.round(b.vfy)}\nANF\t${String(Math.round(b.anfx)).padStart(7,'0')}\t${Math.round(b.anfy)}`;download('boom_koordinatlari.txt',txt);status('Boom koordinatları TXT olarak indirildi.')}catch(e){status('Hata: '+e.message)}}
 function computeAnchors(){let lat=num('lat','Enlem'),lon=num('lon','Boylam'),start=num('angle','Başlangıç açısı'),len=num('length','Ankraj mesafesi');let zone=val('zone')||zoneFor(lat,lon);let center=wgsToEd50(lat,lon,zone);let arr=[];for(let i=0;i<3;i++){let a=(start+i*120)%360,p=dest(lat,lon,len,a),xy=wgsToEd50(p.lat,p.lon,zone);arr.push({idx:i+1,angle:a,lat:p.lat,lon:p.lon,x:xy[0],y:xy[1]})}return {lat,lon,start,len,zone,center,anchors:arr}}
 function fillAnchorTable(data){el('anchorRows').innerHTML=data.anchors.map(a=>`<tr><td>${a.angle.toFixed(1)}</td><td>${a.lat.toFixed(6)}, ${a.lon.toFixed(6)}</td><td>${a.x.toFixed(0)}, ${a.y.toFixed(0)}</td></tr>`).join('')}
 function fit(points){if(!points.length)return;map.fitBounds(L.latLngBounds(points),{padding:[30,30],maxZoom:17})}
